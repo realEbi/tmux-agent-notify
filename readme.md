@@ -52,7 +52,7 @@ Neither agent has a hook that says a prompt was answered, which is why the watch
 
 - macOS, tmux, and the Cursor CLI or Claude Code started inside a tmux pane.
 - `jq` (ships with macOS 15 and later, otherwise `brew install jq`) and `perl` (ships with macOS).
-- Recommended: `brew install terminal-notifier` for click-to-focus. Without it, notifications fall back to `osascript`, which cannot focus the pane.
+- Recommended: `brew install terminal-notifier` for click-to-focus. Without it, notifications fall back to `osascript`, which cannot focus the pane: clicking one opens Script Editor.
 
 ## Install
 
@@ -78,8 +78,20 @@ The installer replaces the old `notify-on-stop` and `notify-on-approval` entries
 
 ### macOS setup
 
-- **Notifications:** System Settings → Notifications → **terminal-notifier** → allow notifications, with banners or alerts and sound on. If you denied it earlier, run `tccutil reset UserNotification fr.julienxx.oss.terminal-notifier` and trigger a notification to get the prompt again. For the `osascript` fallback, allow **Script Editor** too.
-- **Automation:** if macOS asks whether your terminal may control System Events, allow it. That is how the hooks tell whether you are looking at the pane.
+Notifications are off until macOS is told to allow them, so do this once after installing.
+
+**1. Allow notifications for terminal-notifier.** Open System Settings → Notifications → **terminal-notifier** and turn on **Allow notifications**. Keep **Play sound for notification** on. Choose **Persistent** as the alert style if you want a notification to stay until you click it.
+
+![Notification settings for terminal-notifier](docs/terminal-notifier.png)
+
+If terminal-notifier is not allowed, the hooks fall back to `osascript`. You still get a notification, but clicking it opens Script Editor instead of your tmux pane.
+
+**2. Allow automation.** If macOS asks whether your terminal may control System Events, allow it. That is how the hooks tell whether you are looking at the pane.
+
+Notes:
+
+- If terminal-notifier is missing from the list, trigger one notification first (see "Try it" below) so macOS registers it.
+- If you denied it earlier and the switch is not there, run `tccutil reset UserNotification fr.julienxx.oss.terminal-notifier` and trigger a notification to get the prompt again.
 - Focus and Do Not Disturb hide banners.
 
 ## Try it
@@ -96,7 +108,7 @@ Cursor:
 2. While the approval card is up, switch to another app. You should get **Cursor needs approval**.
 3. Approve it and stay away until the turn ends. You should get **Cursor finished**.
 
-If nothing shows up, check the macOS setup above, and that the agent was started inside tmux so the hooks see `TMUX_PANE`.
+If nothing shows up, check the macOS setup above, and that the agent was started inside tmux so the hooks see `TMUX_PANE`. If clicking a notification opens Script Editor, terminal-notifier is not allowed to post notifications; see step 1 of the macOS setup.
 
 ## Settings
 
