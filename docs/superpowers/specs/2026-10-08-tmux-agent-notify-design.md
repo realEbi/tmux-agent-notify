@@ -1,6 +1,6 @@
 # tmux-agent-notify design
 
-Status: implemented. Revised after an independent review, a second round of measurements, and a review of the implementation.
+Status: implemented. Revised after an independent review, a second round of measurements, and a review of the implementation. Codex was added on 2026-10-11, after measurements on Codex CLI 0.162.1.
 
 Date: 2026-10-08
 
@@ -8,7 +8,7 @@ Builds on [tmux-cursor-notify design](2026-09-29-tmux-cursor-notify-design.md). 
 
 ## Goal
 
-Make the tool work for any agentic CLI running in a local tmux pane, not only Cursor. Keep Cursor working as it does today, add Claude Code, and shape the design so Codex can be added next without changing the core.
+Make the tool work for any agentic CLI running in a local tmux pane, not only Cursor. Keep Cursor working as it does today, add Claude Code, and shape the design so Codex can be added next without changing the core. Codex has since been added. It needed one small addition to the core, the optional locator described under **Adapter contract**.
 
 The user-visible behavior is the same for every agent:
 
@@ -31,14 +31,15 @@ The user-visible behavior is the same for every agent:
 
 ## Agents
 
-| | Cursor | Claude Code | Codex (next) |
+| | Cursor | Claude Code | Codex |
 | --- | --- | --- | --- |
 | Config file | `~/.cursor/hooks.json` | `~/.claude/settings.json` | `~/.codex/hooks.json` |
 | Entry shape | `{command}` | `{matcher?, hooks: [{type: "command", command}]}` | same as Claude Code |
 | `finished` | `stop`, `status: completed` | `Stop` | `Stop` |
 | `failed` | `stop`, `status: error` | `StopFailure` | none |
 | `attention` | `beforeShellExecution`, `beforeMCPExecution` | `Notification`, matcher `permission_prompt` | `PermissionRequest` |
-| Prompt is on screen when the hook runs | no, it appears just after | yes | no, it appears just after (to confirm) |
+| Prompt is on screen when the hook runs | no, it appears just after | yes | no, it appears about 0.13 seconds after |
+| Hook runs inside the agent's pane | yes | yes | not by default; see **Codex adapter** |
 | Session id | `conversation_id` | `session_id` | `session_id` |
 | Folder | `workspace_roots[0]` | `cwd` | `cwd` |
 | Label in titles | `Cursor` | `Claude` | `Codex` |
@@ -46,7 +47,7 @@ The user-visible behavior is the same for every agent:
 Notes:
 
 - Claude Code's `Stop` does not fire on a user interrupt, and Cursor's `aborted` status is ignored, so an interrupted turn is silent for both.
-- Codex's `Stop` fires only when a turn completes. Read from `codex-rs/core/src/session/turn.rs` on `main`: the error branch runs no user hook, and an interrupt runs `Interrupt` instead. Confirm on the installed version with a logging hook before writing the Codex adapter.
+- Codex's `Stop` fires only when a turn completes. An interrupt, or a denial with Esc, runs `Interrupt` instead, which is not hooked, so those are silent. Codex has no failure hook: there is no `StopFailure` and no `Notification` event. The Codex column was measured on Codex CLI 0.162.1 with a logging hook.
 - Codex's older `notify` setting is not used. It is a single slot and may already be taken.
 
 ## Measurements
@@ -80,12 +81,39 @@ What the pane shows:
 
 Also seen: a turn that starts a background subagent fires `Stop` at once, and the subagent's prompt arrives after it.
 
+### Codex
+
+Measured on Codex CLI 0.162.1 in a tmux pane 110 columns wide, with a logging hook on every event and a sampler on the pane's text. Runs: a shell command approved, a file edit (`apply_patch`) approved, and prompts ended with Esc.
+
+What Codex tells us:
+
+- **Config.** `~/.codex/hooks.json` has the same nested shape as Claude Code's `hooks` key. The file holds only hooks, plus an optional top-level `description`.
+- **Payload.** JSON on stdin with `session_id`, `cwd`, `hook_event_name` and `turn_id`. `PermissionRequest` adds `tool_name` (`Bash`, `apply_patch`, or the name of an MCP tool), `tool_input.command`, and sometimes `tool_input.description`. For `apply_patch` the command is the whole patch text, many lines long, starting with `*** Begin Patch`.
+- **Reply.** `{}` on stdout leaves the approval with the user.
+- **`PermissionRequest` fires about 0.13 seconds before the approval screen is drawn.**
+- **New hooks are skipped until the user trusts them.** At its next start Codex shows "Hooks need review" with a "Trust all and continue" choice; `/hooks` inside Codex does the same.
+
+What the pane shows:
+
+- **The last line of the pane that is not blank is `Press enter to confirm or esc to cancel` for as long as an approval screen is up**, for shell commands and for file edits.
+- The screen does not change while the prompt is up.
+- That line is gone as soon as the prompt is answered.
+
+Where the hook runs:
+
+- **By default Codex runs hook commands inside a shared background daemon** (`codex app-server --listen unix://... --managed-daemon`), not inside the session's own process. The hook's parent process is the daemon, and its `TMUX`, `TMUX_PANE` and `__CFBundleIdentifier` are the daemon's: those of wherever the daemon was first started. They can name the wrong pane, another tmux server or another terminal app, or be missing.
+- With `codex --no-daemon` the hook's parent is the session's own `codex` process and the environment is right.
+- The session's own process, the `codex` program running in the pane with a terminal attached, has the right three values in its environment. On macOS the same user can read them with `ps eww -o command= -p <pid>`.
+- Its working directory, read with `lsof -a -d cwd -p <pid> -Fn`, equals the payload's `cwd` when Codex was started in that folder.
+- **Nothing links a session id to a process.** The folder is the only key.
+
 ## Architecture
 
 ```
 bin/notify              entry point for every hook
 bin/agents/cursor.sh    Cursor adapter
 bin/agents/claude.sh    Claude Code adapter
+bin/agents/codex.sh     Codex adapter
 bin/lib.sh              tmux, focus check, notification, watcher helpers
 bin/focus-pane          notification click action (unchanged)
 bin/install             installer
@@ -97,10 +125,12 @@ bin/install             installer
 
 `bin/notify <agent> <hook-event>` reads the hook payload on stdin.
 
-1. If `TMUX_PANE` is unset or empty, or the agent has no adapter, print `{}` and exit.
-2. Source `bin/agents/<agent>.sh` and ask it to read the payload.
-3. Act on the kind the adapter returns (see **Event handling**). An adapter that returns no kind means "ignore".
-4. Print `{}` and exit 0, whatever happened.
+1. Source `bin/agents/<agent>.sh`. If the agent has no adapter, print `{}` and exit.
+2. If `TMUX_PANE` is unset or empty and the adapter has no locator, print `{}` and exit. Cursor and Claude Code have none, so for them this is the old rule.
+3. Ask the adapter to read the payload. An adapter that returns no kind means "ignore".
+4. If there is a kind and the adapter has a locator, call it. It may replace `TMUX`, `TMUX_PANE` and `__CFBundleIdentifier`. If `TMUX_PANE` is still unset or empty afterwards, ignore the event.
+5. Act on the kind (see **Event handling**).
+6. Print `{}` and exit 0, whatever happened.
 
 ### Adapter contract
 
@@ -111,6 +141,11 @@ An adapter is a sourced bash file. It provides:
 - A prompt check: given the text of the pane and `detail`, say whether this agent's prompt is on screen.
 - Whether the prompt is already on screen when the `attention` hook runs. Claude Code: yes. Cursor: no, the watcher must first wait for it to appear.
 - Its hook list for the installer: for each hook, the event name and an optional matcher.
+
+Two parts are optional:
+
+- **A locator**, the function `agent_locate`, for an agent whose hooks may run outside its pane. The core calls it with no arguments, in the same shell, after the parse step and only when the kind is not empty. It can read what the parse step set; `folder` is still the whole path at that point. It may set and export `TMUX`, `TMUX_PANE` and `__CFBundleIdentifier`, or unset them. The rest of the hook run uses those values: the focus check, the pane check, the watcher (which inherits them) and the click command. Leaving `TMUX_PANE` empty means no notification. It must not block: a few quick commands at most. An adapter without the function is never asked, and for it nothing changes.
+- **An install note**, the variable `AGENT_INSTALL_NOTE`: one line the installer prints, indented by two spaces, after the agent's `<agent>: <file>` line.
 
 The parse step must treat the payload as data. Values are read with `jq` and never executed. Unreadable JSON, a non-object value, or missing fields give an empty kind.
 
@@ -187,6 +222,35 @@ A `Notification` whose `notification_type` is not `permission_prompt` gives an e
 
 **Prompt check:** one of the last three lines of the pane that are not blank contains `Esc to cancel`. A line of only spaces or tabs is blank. Three lines are checked, not one, because a narrow pane wraps the footer. Lines further up are not checked, so the same words elsewhere in the conversation do not count. The prompt is on screen when the hook runs, because `Notification` arrives six seconds after it appears.
 
+## Codex adapter
+
+| Hook | Matcher | Kind | Title |
+| --- | --- | --- | --- |
+| `Stop` | | `finished` | `Codex finished` |
+| `PermissionRequest` | | `attention` | `Codex needs approval` |
+
+Session is `session_id`. Folder comes from `cwd`. `Interrupt` is not hooked. There is no `failed` kind.
+
+`detail` for `PermissionRequest`:
+
+- `apply_patch`: `Edit ` and the name of the first file in the patch, from its first `*** Add File:`, `*** Update File:` or `*** Delete File:` line. `Edit files` when there is none.
+- any other tool: the first line of `tool_input.command`, or the tool's name when there is no command.
+
+**Prompt check:** one of the last three lines of the pane that are not blank contains `enter to confirm or esc to cancel`. Blank lines and the reason for three lines are as for Claude Code. `detail` is not used. The prompt is not on screen when the hook runs, so the watcher waits for it to appear, as for Cursor.
+
+**Locator.** `agent_locate` does this:
+
+1. Read the command line of the hook's parent process (`ps -o command= -p $PPID`). If it is not a Codex `app-server`, stop: the hook runs inside the session and its environment is right.
+2. If the payload has no `cwd`, stop.
+3. List all processes (`ps -axo pid=,tty=,command=`) and keep the Codex sessions: a terminal is attached, the command line has a path ending in `codex`, and it has no `app-server` argument.
+4. Read their working directories with one `lsof -a -d cwd -p <pids> -Fpn` call. Take the first one whose directory equals the payload's `cwd`. Both are resolved first, so `/tmp` equals `/private/tmp` and a trailing slash does not matter. A directory that no longer exists is compared as text.
+5. If none matches, stop.
+6. Read that process's environment (`ps eww -o command= -p <pid>`) as words separated by spaces, and take `TMUX`, `TMUX_PANE` and `__CFBundleIdentifier` from it. `TMUX_PANE` must look like `%12` and `TMUX` like `/path,1,0`. If either is missing or does not, both are unset, so a session that is not in tmux gets no notification. A missing `__CFBundleIdentifier` is unset too.
+
+"Stop" in steps 1, 2 and 5, and any `ps` or `lsof` failure, keeps the hook's own environment. That is three `ps` calls and one `lsof` call at most.
+
+**Install note:** tells the user to trust the new hooks at the next start of Codex, or with `/hooks`.
+
 ## Cursor adapter
 
 Behavior is unchanged from the earlier spec, apart from the longer watcher budget. Only the wiring changes:
@@ -200,14 +264,14 @@ Behavior is unchanged from the earlier spec, apart from the longer watcher budge
 
 `bin/install [agent...]`
 
-- No arguments: install for each known agent whose config directory exists (`~/.cursor`, `~/.claude`). If none exists, print an `install:` error and exit non-zero.
+- No arguments: install for each known agent whose config directory exists (`~/.cursor`, `~/.claude`, `~/.codex`). If none exists, print an `install:` error and exit non-zero.
 - With arguments: install for those agents, creating the config directory if needed. An unknown agent name is an error, and nothing is written for any agent.
 - An agent named more than once is installed once, in the order first named.
-- Print one line per agent installed: `<agent>: <file>`.
+- Print one line per agent installed: `<agent>: <file>`. When the adapter has an install note, print it on the next line, indented by two spaces.
 
 Each agent's file is merged with `jq`, written to a temp file beside it, and moved into place, as today. The new file gets the permission bits of the file it replaces; a file that did not exist is created with mode 600, as `mktemp` makes it. A failure for one agent leaves that agent's file unchanged and makes the exit status non-zero; other agents are still attempted.
 
-The hook command is `<bin>/notify <agent> <hook-event>`, where `<bin>` is the symlink-resolved directory of `bin/install`. Claude Code runs the command through a shell, so `<bin>/notify` is single-quoted in Claude Code's file. Cursor's is written unquoted, as today.
+The hook command is `<bin>/notify <agent> <hook-event>`, where `<bin>` is the symlink-resolved directory of `bin/install`. Claude Code runs the command through a shell, so `<bin>/notify` is single-quoted in Claude Code's file. Codex's file is written the same way. Cursor's is written unquoted, as today.
 
 **Removing our old entries.** Before adding, the installer removes entries left by an earlier install, for every event in the file, when the command (with any single quotes removed) is one of:
 
@@ -228,6 +292,8 @@ A group left with no hooks is removed too. Entries that match none of these are 
 - Skip the append when any group under that event already contains a hook with the same `command`.
 - Invalid JSON, a non-object root, a non-object `hooks`, or a non-array event leaves the file unchanged and reports an error.
 
+**Codex.** In `~/.codex/hooks.json`, with the same rules as for Claude Code: a missing or empty file is treated as `{}`, `description` and other hooks are kept, a group is appended to `hooks.Stop` and to `hooks.PermissionRequest` without a matcher, and nothing is added twice. The installer cannot trust the hooks for the user, so it prints the adapter's install note.
+
 Uninstall is out of scope.
 
 ## Error handling
@@ -241,7 +307,7 @@ New:
 
 ## Testing
 
-Same approach: no real agent is started, and fakes for `osascript`, `terminal-notifier`, `tmux`, and `mv` sit first on `PATH`.
+Same approach: no real agent is started, and fakes for `osascript`, `terminal-notifier`, `tmux`, `mv`, `ps` and `lsof` sit first on `PATH`. The fake `ps` and `lsof` answer from files, one set per process id; the harness itself uses the real `ps` to find watchers.
 
 Harness changes needed:
 
@@ -254,7 +320,9 @@ Cases:
 - **Core** (focus check, pane check, click command, fallback, `{}` on every path): the existing `notify-on-stop` cases, run through `bin/notify cursor stop`.
 - **Cursor adapter:** the existing stop and approval cases under the new command names.
 - **Claude Code adapter:** fixture payloads for each hook in the table. Titles, bodies, and groups; `Notification` with another type is silent; bad JSON is silent.
-- **Watcher**, for both adapters unless noted:
+- **Codex adapter:** payloads and pane text as captured from Codex CLI 0.162.1. Titles, bodies, and groups; the detail for a shell command, a patch, and another tool; the prompt check on the captured screens; `Interrupt` and other events are silent; bad JSON is silent. Watcher: away, looking then away, answered then away, the prompt appears a few polls after the hook, and the prompt never appears.
+- **Codex locator:** the hook's environment names pane A and the session for the payload's folder runs in pane B on another socket under another terminal app: every tmux call, the focus check, the pane file and the click command use B. No `TMUX_PANE` in the hook's environment still notifies. No session in the folder, a parent that is not the daemon, and a failing `ps` or `lsof` all keep the hook's environment. The daemon, processes without a terminal and other programs are not taken for sessions. `/tmp` against `/private/tmp`, and trailing slashes. A session outside tmux is silent. Text from `ps` and `lsof` is never executed. Cursor and Claude Code never call `ps` or `lsof`.
+- **Watcher**, for the Cursor and Claude Code adapters unless noted:
   - Away when the prompt is up: notifies on the first poll.
   - Looking, then away with the prompt still up: notifies after the focus change.
   - Looking, then the prompt leaves the pane: exits without notifying, including when the user looks away afterwards.
@@ -272,7 +340,7 @@ Cases:
   - A setting that is not a number: the default is used.
   - Time budget reached while looking: no notification.
   - The hook returns before the watcher finishes.
-- **Installer:** the existing Cursor cases; each removal rule, and an unrelated entry that survives; Claude Code create, merge, keep other keys and hooks, idempotent second run, matcher present only where specified, quoted path, invalid shapes left unchanged; no-argument agent detection; unknown agent name; a whitespace-only file; an agent named twice; permission bits kept.
+- **Installer:** the existing Cursor cases; each removal rule, and an unrelated entry that survives; Claude Code create, merge, keep other keys and hooks, idempotent second run, matcher present only where specified, quoted path, invalid shapes left unchanged; Codex create, merge, idempotent second run, stale entries, invalid shapes, and the install note after its line only; no-argument agent detection; unknown agent name; a whitespace-only file; an agent named twice; permission bits kept.
 
 Manual check for Claude Code, mirroring the Cursor one: trigger a permission prompt while away; trigger one while looking and then switch app; trigger one while looking, then approve, deny, and press Esc in turn, switching app after each and confirming silence; approve a long command and switch app while it runs, confirming silence; finish a turn while away.
 
@@ -282,10 +350,16 @@ Rewrite for the new name, both agents, the `bin/install [agent...]` form, the re
 
 ## Known limitations
 
-- **Prompt text can change.** Every adapter recognizes its prompt by words on screen: `Esc to cancel` for Claude Code 2.1.294, three card titles for Cursor. A new version that changes those words stops approval notifications for that agent until the adapter is updated.
+- **Prompt text can change.** Every adapter recognizes its prompt by words on screen: `Esc to cancel` for Claude Code 2.1.294, `enter to confirm or esc to cancel` for Codex CLI 0.162.1, three card titles for Cursor. A new version that changes those words stops approval notifications for that agent until the adapter is updated.
 - **Six-second delay (Claude Code).** An approval notification arrives six seconds after the prompt, because that is when Claude Code fires `Notification`. A prompt answered sooner never notifies.
 - **Approval and question look the same (Claude Code).** Both get the title `Claude is waiting for you`.
 - **"Finished" with background work still running (Claude Code).** A turn that hands work to a background subagent or shell ends at once, so `Claude finished` is posted while that work continues. A later prompt from it notifies as usual.
+- **Hooks must be trusted (Codex).** Codex skips the hooks until the user has trusted them once, at start or with `/hooks`. The installer can only say so.
+- **No error notification (Codex).** A turn that ends in an error runs no hook, so nothing is posted.
+- **Two sessions in one folder (Codex).** While the daemon runs the hooks, the folder is the only link between a hook and its session. With two sessions started in the same folder, the first one found is used, so a notification may point at the other one's pane, and the focus check is about that pane too. `codex --no-daemon` avoids this.
+- **A session whose folder differs from where it was started (Codex).** Started with `-C <dir>`, or from another folder than its working root, its process's working directory is not the payload's `cwd`, so the locator does not find it. The hook's own environment is then used. That is right with `codex --no-daemon`, and may be wrong or empty with the daemon.
+- **Other Codex prompts were not measured.** Only the approval screens for shell commands and file edits were checked. Questions, plan approval and other prompts notify only if Codex fires `PermissionRequest` for them and one of their last three lines contains the same words.
+- **The locator depends on what `ps` and `lsof` print on macOS** and on the daemon's command line holding `codex` and `app-server`. Environment values with spaces in them are not read correctly; a tmux socket path with a space makes the session count as outside tmux.
 - **A locked screen counts as looking.** The terminal stays frontmost when the screen locks, so walking away without switching app does not notify.
 - **A terminal in the background counts as looking.** The focus check asks which app is frontmost and whether the pane is the active one in an attached session. A session attached in a background tab or window of the frontmost terminal passes both.
 - **A slow `osascript` delays everything behind it.** The focus check waits for `osascript`. If it hangs, for example on the first-run Automation dialog, the watcher's poll and the finished notification wait with it.
@@ -296,7 +370,7 @@ Rewrite for the new name, both agents, the `bin/install [agent...]` form, the re
 
 ## Out of scope
 
-- The Codex adapter itself. It needs a prompt check for Codex's approval screen, measured the same way, and a manual `/hooks` review step that the installer cannot do.
+- Trusting the Codex hooks for the user. That is a manual step in Codex.
 - Uninstall.
 - Per-agent settings for sound, titles, or which events notify.
 - Everything listed as out of scope in the earlier spec.
