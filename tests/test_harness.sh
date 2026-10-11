@@ -235,6 +235,41 @@ test_harness_cleanup_stops_watchers() {
   assert_no_watchers "$pane"
 }
 
+# The fake ps and lsof answer from FAKE_STATE, one file per process.
+test_harness_fake_ps_and_lsof() {
+  harness_use_fakes
+  run_capture ps -o command= -p 41
+  assert_exit 1
+  assert_stdout_trimmed ''
+  fake_set ps-command-41 '/bin/codex app-server'
+  fake_set ps-env-41 '/bin/codex app-server A=1'
+  fake_set ps-list '   41 ??       /bin/codex app-server'
+  run_capture ps -o command= -p 41
+  assert_exit 0
+  assert_stdout_trimmed '/bin/codex app-server'
+  run_capture ps eww -o command= -p 41
+  assert_stdout_trimmed '/bin/codex app-server A=1'
+  run_capture ps -axo pid=,tty=,command=
+  assert_stdout_trimmed '   41 ??       /bin/codex app-server'
+  assert_log_line ps 'eww -o command= -p 41'
+
+  fake_set lsof-cwd-41 /tmp/a
+  fake_set lsof-cwd-43 /tmp/c
+  run_capture lsof -a -d cwd -p 41,42,43 -Fpn
+  assert_exit 1
+  assert_stdout_trimmed $'p41\nfcwd\nn/tmp/a\np43\nfcwd\nn/tmp/c'
+  run_capture lsof -a -d cwd -p 43 -Fpn
+  assert_exit 0
+  assert_log_line lsof '-a -d cwd -p 43 -Fpn'
+}
+
+# The harness looks for watchers with the real ps, not the fake one.
+test_harness_watchers_use_real_ps() {
+  harness_use_fakes
+  harness_watchers %none >/dev/null
+  assert_not_called ps
+}
+
 run_tests \
   test_harness_state_dirs \
   test_harness_fake_set_skips_mv_log \
@@ -252,4 +287,6 @@ run_tests \
   test_harness_wait_until \
   test_harness_tmux_calls \
   test_harness_no_watchers \
-  test_harness_cleanup_stops_watchers
+  test_harness_cleanup_stops_watchers \
+  test_harness_fake_ps_and_lsof \
+  test_harness_watchers_use_real_ps

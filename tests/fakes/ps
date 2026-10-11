@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Answers from FAKE_STATE (see fake_set):
+#   ps eww -o command= -p PID   -> ps-env-PID
+#   ps -o command= -p PID       -> ps-command-PID
+#   ps -axo ...                 -> ps-list
+# A missing file gives no output and exit status 1, like a process that is gone.
+mkdir -p "$FAKE_LOG"
+printf '%s\n' "$*" >> "$FAKE_LOG/ps"
+name=ps-list pid=
+for arg in "$@"; do
+  pid=$arg
+done
+case " $* " in
+  *' eww '*) name=ps-env-$pid ;;
+  *' -p '*) name=ps-command-$pid ;;
+esac
+if [ -n "${FAKE_STATE-}" ] && [ -f "$FAKE_STATE/$name" ]; then
+  printf '%s\n' "$(cat "$FAKE_STATE/$name")"
+  exit 0
+fi
+exit 1

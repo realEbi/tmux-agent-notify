@@ -36,9 +36,10 @@ harness_hide() {
 # Change what a fake answers from its next call on, even for a process that is
 # already running. Names: tmux-capture, tmux-capture-exit, tmux-display,
 # osa-bundle, osa-name, and tmux-capture-once, which is the pane text for the
-# next capture-pane call only. Written through a temp file and renamed, so a
-# reader never sees a half-written value. /bin/mv, not the fake mv, to keep its
-# log clean.
+# next capture-pane call only. For the fake ps and lsof: ps-list, and for each
+# process id ps-command-PID, ps-env-PID and lsof-cwd-PID. Written through a
+# temp file and renamed, so a reader never sees a half-written value. /bin/mv,
+# not the fake mv, to keep its log clean.
 fake_set() {
   local name="$1" value="$2"
   local tmp="$FAKE_STATE/.$name.$$.tmp"
@@ -250,7 +251,8 @@ assert_log_line() {
 # arguments. Filtered in bash, so no helper process carries the pattern.
 harness_watchers() {
   local pane="$1" listing pid cmd
-  listing=$(ps -axo pid=,command=) || {
+  # /bin/ps, not the fake ps, to see real processes and keep its log clean.
+  listing=$(/bin/ps -axo pid=,command=) || {
     echo "harness_watchers: ps failed" >&2
     return 1
   }

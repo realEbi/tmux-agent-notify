@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# lsof -a -d cwd -p PID[,PID...] -Fpn
+# Prints p<pid>, fcwd and n<directory> for each PID that has a file
+# lsof-cwd-PID in FAKE_STATE (see fake_set), in the order given.
+mkdir -p "$FAKE_LOG"
+printf '%s\n' "$*" >> "$FAKE_LOG/lsof"
+pids= previous= status=0
+for arg in "$@"; do
+  [ "$previous" = -p ] && pids=$arg
+  previous=$arg
+done
+IFS=, read -r -a list <<<"$pids"
+for pid in ${list[@]+"${list[@]}"}; do
+  if [ -n "${FAKE_STATE-}" ] && [ -f "$FAKE_STATE/lsof-cwd-$pid" ]; then
+    printf 'p%s\nfcwd\nn%s\n' "$pid" "$(cat "$FAKE_STATE/lsof-cwd-$pid")"
+  else
+    status=1
+  fi
+done
+exit "$status"

@@ -1,0 +1,39 @@
+› Run the shell command: echo hi > b.txt (one command only, then reply done)
+• I’ll run that command.
+
+✔ You approved codex to run echo hi > b.txt this time
+
+• Ran echo hi > b.txt
+  └ (no output)
+
+• done
+
+  Worked for 50s • 19:27
+
+
+› Use apply_patch to add a second line 'world' to a.txt, then reply done
+
+
+• I’ll check a.txt, then add the second line with apply_patch.
+
+• Explored
+  └ Read a.txt
+    + Show details
+
+• Edited a.txt (+1 -0)
+    2 +world
+    + Show details
+
+
+  Would you like to make the following edits?
+
+  Description: Apply proposed file edits
+  Destination:
+  /private/tmp/proj/a.txt
+
+
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for these files (a)
+  3. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel
