@@ -11,6 +11,12 @@ CLAUDE_STOP="'$BIN/notify' claude Stop"
 CLAUDE_FAILURE="'$BIN/notify' claude StopFailure"
 CLAUDE_NOTIFICATION="'$BIN/notify' claude Notification"
 
+# Codex's too.
+CODEX_STOP="'$BIN/notify' codex Stop"
+CODEX_PERMISSION="'$BIN/notify' codex PermissionRequest"
+# The line the installer prints after Codex's, from the adapter.
+CODEX_NOTE=$(. "$ROOT/bin/agents/codex.sh" && printf '  %s' "$AGENT_INSTALL_NOTE")
+
 fresh_home() {
   harness_use_fakes
   export HOME
@@ -76,6 +82,33 @@ with_claude_groups() {
   printf '%s' "$1" | jq --argjson ours "$groups" '
     reduce ($ours | to_entries[]) as $e (.; .hooks[$e.key] += [$e.value])
   '
+}
+
+# The two groups a first install adds to Codex's hooks.json, as {Event: group}.
+codex_groups() {
+  jq -n --arg stop "$CODEX_STOP" --arg permission "$CODEX_PERMISSION" '{
+    Stop: {hooks: [{type: "command", command: $stop}]},
+    PermissionRequest: {hooks: [{type: "command", command: $permission}]}
+  }'
+}
+
+# The hooks.json a first install writes for Codex.
+codex_created() {
+  codex_groups | jq '{hooks: map_values([.])}'
+}
+
+# with_codex_groups JSON
+# JSON with our two groups appended to its events.
+with_codex_groups() {
+  local groups
+  groups=$(codex_groups)
+  printf '%s' "$1" | jq --argjson ours "$groups" '
+    reduce ($ours | to_entries[]) as $e (.; .hooks[$e.key] += [$e.value])
+  '
+}
+
+codex_path() {
+  printf '%s/.codex/hooks.json' "$HOME"
 }
 
 assert_created() {
@@ -874,6 +907,138 @@ test_install_claude_mv_fails() {
   fi
 }
 
+test_install_codex_creates() {
+  fresh_home
+  run_install codex
+  assert_exit 0
+  local expected
+  expected=$(codex_created)
+  assert_json "$(codex_path)" "$expected"
+  # No matcher, and no version key as in Cursor's file.
+  [ "$(jq -c '[.. | objects | keys[]] | unique' "$(codex_path)")" = '["PermissionRequest","Stop","command","hooks","type"]' ] ||
+    { echo "unexpected keys in $(codex_path)" >&2; cat "$(codex_path)" >&2; exit 1; }
+  assert_missing "$HOME/.cursor"
+  assert_missing "$HOME/.claude"
+  # The file's line, then what is left for you to do.
+  assert_stdout_trimmed "codex: $(codex_path)
+$CODEX_NOTE"
+  case $CODEX_NOTE in
+    *trust*/hooks*) ;;
+    *) echo "the note does not say how to trust the hooks: [$CODEX_NOTE]" >&2; exit 1 ;;
+  esac
+}
+
+test_install_codex_empty_file() {
+  fresh_home
+  mkdir -p "$HOME/.codex"
+  : > "$(codex_path)"
+  run_install codex
+  assert_exit 0
+  local expected
+  expected=$(codex_created)
+  assert_json "$(codex_path)" "$expected"
+}
+
+# Other hooks and the description are kept, and a second run changes nothing.
+test_install_codex_merges_idempotent() {
+  fresh_home
+  mkdir -p "$HOME/.codex"
+  local fixture expected before
+  fixture='{
+    "description": "my hooks",
+    "hooks": {
+      "Stop": [{"hooks": [{"type": "command", "command": "/bin/theirs"}]}],
+      "PermissionRequest": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "/bin/guard"}]}],
+      "SessionStart": [{"hooks": [{"type": "command", "command": "/bin/hello"}]}]
+    }
+  }'
+  printf '%s\n' "$fixture" > "$(codex_path)"
+  run_install codex
+  assert_exit 0
+  expected=$(with_codex_groups "$fixture")
+  assert_json "$(codex_path)" "$expected"
+  before=$(cat "$(codex_path)")
+  run_install codex
+  assert_exit 0
+  assert_bytes_unchanged "$(codex_path)" "$before"
+  # The note is printed again: the installer cannot see whether you trusted them.
+  assert_stdout_trimmed "codex: $(codex_path)
+$CODEX_NOTE"
+}
+
+# Entries written from another checkout are replaced; a group keeps its other hooks.
+test_install_codex_removes_stale() {
+  fresh_home
+  mkdir -p "$HOME/.codex"
+  local q="'" fixture expected
+  fixture=$(jq -n --arg old "${q}/old/tmux-agent-notify/bin/notify${q} codex Stop" \
+    --arg oldp "${q}/old/tmux-agent-notify/bin/notify${q} codex PermissionRequest" '{
+    hooks: {
+      Stop: [{hooks: [{type: "command", command: $old}, {type: "command", command: "/bin/theirs"}]}],
+      PermissionRequest: [{hooks: [{type: "command", command: $oldp}]}]
+    }
+  }')
+  printf '%s\n' "$fixture" > "$(codex_path)"
+  run_install codex
+  assert_exit 0
+  expected=$(with_codex_groups '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/bin/theirs"}]}],"PermissionRequest":[]}}')
+  assert_json "$(codex_path)" "$expected"
+}
+
+test_install_codex_invalid() {
+  local content before
+  for content in 'not-json' '[]' '{"hooks":[]}' '{"hooks":{"Stop":{}}}'; do
+    fresh_home
+    mkdir -p "$HOME/.codex"
+    printf '%s' "$content" > "$(codex_path)"
+    before=$(cat "$(codex_path)")
+    run_install codex
+    assert_exit 1
+    assert_log_contains stderr 'install: cannot update'
+    assert_bytes_unchanged "$(codex_path)" "$before"
+    # Nothing was installed, so there is nothing to trust.
+    assert_stdout_trimmed ''
+  done
+}
+
+test_install_detects_codex() {
+  local expected
+  # Only ~/.codex: Codex is installed and the other directories are not created.
+  fresh_home
+  mkdir -p "$HOME/.codex"
+  run_capture "$ROOT/bin/install"
+  assert_exit 0
+  expected=$(codex_created)
+  assert_json "$(codex_path)" "$expected"
+  assert_missing "$HOME/.cursor"
+  assert_missing "$HOME/.claude"
+  assert_stdout_trimmed "codex: $(codex_path)
+$CODEX_NOTE"
+
+  # All three present: all installed, and the note follows Codex's line only.
+  fresh_home
+  mkdir -p "$HOME/.claude" "$HOME/.cursor" "$HOME/.codex"
+  run_capture "$ROOT/bin/install"
+  assert_exit 0
+  assert_json "$(codex_path)" "$expected"
+  expected=$(claude_created)
+  assert_json "$(settings_path)" "$expected"
+  assert_created
+  assert_stdout_trimmed "claude: $(settings_path)
+codex: $(codex_path)
+$CODEX_NOTE
+cursor: $(hooks_path)"
+
+  # ~/.codex missing: Codex is left alone.
+  fresh_home
+  mkdir -p "$HOME/.claude" "$HOME/.cursor"
+  run_capture "$ROOT/bin/install"
+  assert_exit 0
+  assert_missing "$HOME/.codex"
+  assert_stdout_trimmed "claude: $(settings_path)
+cursor: $(hooks_path)"
+}
+
 run_tests \
   test_install_creates \
   test_install_empty_object \
@@ -915,4 +1080,10 @@ run_tests \
   test_install_invalid_agent_name \
   test_install_one_fails_other_continues \
   test_install_prints_agents \
-  test_install_claude_mv_fails
+  test_install_claude_mv_fails \
+  test_install_codex_creates \
+  test_install_codex_empty_file \
+  test_install_codex_merges_idempotent \
+  test_install_codex_removes_stale \
+  test_install_codex_invalid \
+  test_install_detects_codex

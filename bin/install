@@ -88,7 +88,8 @@ install_agent() {
   dir=$(dirname "$dest")
   mkdir -p "$dir" || fail "cannot create $dir"
 
-  # Claude Code runs the command through a shell; Cursor's is written unquoted.
+  # Claude Code and Codex run the command through a shell; Cursor's is written
+  # unquoted.
   notify=$bin_dir/notify
   [ "$AGENT_CONFIG_SHAPE" = nested ] && notify=$(shell_quote "$notify")
 
@@ -111,6 +112,10 @@ install_agent() {
     fail "cannot write $dest"
   fi
   printf '%s: %s\n' "$agent" "$dest"
+  # What is left for you to do, when the adapter has something to say.
+  if [ -n "${AGENT_INSTALL_NOTE-}" ]; then
+    printf '  %s\n' "$AGENT_INSTALL_NOTE"
+  fi
 }
 
 command -v jq >/dev/null 2>&1 && jq -n . >/dev/null 2>&1 || fail 'jq not found'
