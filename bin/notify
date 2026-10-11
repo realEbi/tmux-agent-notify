@@ -74,9 +74,19 @@ fi
 agent=${1-} event=${2-}
 input=$(cat)
 
-if [ -n "${TMUX_PANE-}" ] && load_adapter "$agent"; then
+# An adapter with agent_locate can find the pane itself, so it is also asked
+# when the hook's own environment names none.
+if load_adapter "$agent" && { [ -n "${TMUX_PANE-}" ] || declare -F agent_locate >/dev/null; }; then
   kind= session= folder= detail= title=
   agent_parse "$event" "$input"
+  # The hook may run outside the agent's pane. The adapter then replaces TMUX,
+  # TMUX_PANE and __CFBundleIdentifier with those of the session, for the rest
+  # of this run, the watcher and the click.
+  if [ -n "$kind" ] && declare -F agent_locate >/dev/null; then
+    agent_locate
+  fi
+  # No pane, no notification.
+  [ -n "${TMUX_PANE-}" ] || kind=
 
   # The folder is the last part of the path, e.g. /a/b/ -> b.
   while [[ $folder == */ ]]; do
