@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
+line=$(printf '%s\n' "$*")
+# The pane's shell, from tmux-pane-pid; no answer without it. Logged to a log
+# of its own, so it does not count as a poll (see wait_for_polls).
+if printf '%s' "$line" | grep -q 'pane_pid'; then
+  mkdir -p "$FAKE_LOG"
+  printf '%s\n' "$*" >> "$FAKE_LOG/tmux-pane-pid"
+  [ -n "${FAKE_STATE-}" ] && [ -f "$FAKE_STATE/tmux-pane-pid" ] || exit 1
+  printf '%s\n' "$(cat "$FAKE_STATE/tmux-pane-pid")"
+  exit 0
+fi
 mkdir -p "$FAKE_LOG"
 printf '%s\n' "$@" >> "$FAKE_LOG/tmux"
-line=$(printf '%s\n' "$*")
 if printf '%s' "$line" | grep -q 'capture-pane'; then
   # tmux-capture-once answers a single call. The rename lets only one caller have it.
   if [ -n "${FAKE_STATE-}" ] && /bin/mv "$FAKE_STATE/tmux-capture-once" "$FAKE_STATE/.once.$$" 2>/dev/null; then

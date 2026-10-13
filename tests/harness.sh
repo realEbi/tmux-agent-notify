@@ -247,8 +247,9 @@ assert_log_line() {
   fi
 }
 
-# Print the processes whose command line has both "--watch" and PANE as whole
-# arguments. Filtered in bash, so no helper process carries the pattern.
+# Print the processes whose command line has both "--watch" (or "--watch-turn")
+# and PANE as whole arguments. Filtered in bash, so no helper process carries
+# the pattern.
 harness_watchers() {
   local pane="$1" listing pid cmd
   # /bin/ps, not the fake ps, to see real processes and keep its log clean.
@@ -258,7 +259,7 @@ harness_watchers() {
   }
   while read -r pid cmd; do
     case " $cmd " in
-      *" --watch "*) ;;
+      *" --watch "* | *" --watch-turn "*) ;;
       *) continue ;;
     esac
     case " $cmd " in

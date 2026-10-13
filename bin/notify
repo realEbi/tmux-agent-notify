@@ -65,11 +65,73 @@ watch() {
   done
 }
 
-if [ "${1-}" = --watch ]; then
-  shift
-  watch "$@"
-  exit 0
-fi
+# Background watcher for a whole turn, for a prompt that has no hook of its own
+# (agent_prompt_on_screen with KIND question). Notifies once for each time the
+# prompt shows up while you look away. Stops when the turn file no longer holds
+# TOKEN (the turn ended, or a newer one started), the pane cannot be read, or
+# the agent process AGENT_PID, started at AGENT_START, is gone. Without an
+# agent process it stops after NOTIFY_TURN_MAX_SECONDS instead. Never takes the
+# pane, so approval watchers are left alone.
+watch_turn() {
+  local agent=${1-} pane=${2-} title=${3-} body=${4-} group=${5-} token=${6-}
+  local agent_pid=${7-} agent_start=${8-}
+  local interval slow polls max
+  local seen=0 told=0 missed=0 i=0 screen
+
+  interval=$(number_or "${NOTIFY_APPROVAL_INTERVAL-}" 0.5)
+  slow=$(number_or "${NOTIFY_APPROVAL_SLOW_INTERVAL-}" 2)
+  polls=$(count_or "${NOTIFY_APPROVAL_POLLS-}" 240)
+  max=$(count_or "${NOTIFY_TURN_MAX_SECONDS-}" 86400)
+
+  load_adapter "$agent" || return 0
+  SECONDS=0
+  while true; do
+    turn_is "$pane" "$token" || return 0
+    if [ -n "$agent_pid" ]; then
+      process_alive "$agent_pid" "$agent_start" || return 0
+    elif [ "$SECONDS" -ge "$max" ]; then
+      return 0
+    fi
+    screen=$(tmux_cmd capture-pane -p -t "$pane" 2>/dev/null) || return 0
+    if agent_prompt_on_screen "$screen" '' question; then
+      seen=1 missed=0
+      if [ "$told" = 0 ] && { ! terminal_is_front || ! pane_is_visible "$pane"; }; then
+        notify "$title" "$body" "$group" "$pane"
+        told=1
+      fi
+    elif [ "$seen" = 1 ]; then
+      # Two misses in a row: the prompt was answered. The next one notifies again.
+      missed=$((missed + 1))
+      [ "$missed" -ge 2 ] && seen=0 told=0 missed=0
+    fi
+    i=$((i + 1))
+    if [ "$i" -lt "$polls" ]; then
+      sleep "$interval"
+    else
+      sleep "$slow"
+    fi
+  done
+}
+
+# Run this script again as a watcher, in its own session so it outlives the
+# hook. Its output goes to /dev/null so the agent does not wait for it.
+spawn() {
+  perl -MPOSIX -e 'defined(my $pid = fork) or exit 1; if ($pid) { exit } setsid; exec @ARGV' \
+    "$0" "$@" </dev/null >/dev/null 2>&1
+}
+
+case ${1-} in
+  --watch)
+    shift
+    watch "$@"
+    exit 0
+    ;;
+  --watch-turn)
+    shift
+    watch_turn "$@"
+    exit 0
+    ;;
+esac
 
 agent=${1-} event=${2-}
 input=$(cat)
@@ -96,19 +158,25 @@ if load_adapter "$agent" && { [ -n "${TMUX_PANE-}" ] || declare -F agent_locate 
   group="$agent-${session:-unknown}"
 
   case $kind in
-    finished | failed)
+    finished | failed | ended)
+      turn_end "$TMUX_PANE"
       # Stay quiet when you are already looking at this pane.
-      if ! { terminal_is_front && pane_is_visible "$TMUX_PANE"; }; then
+      if [ "$kind" != ended ] && ! { terminal_is_front && pane_is_visible "$TMUX_PANE"; }; then
         notify "$title" "${folder:-agent}" "$group" "$TMUX_PANE"
       fi
+      ;;
+    turn)
+      # Written here, before the watcher starts, so a turn that ends at once
+      # still stops it. A file that cannot be written leaves the token empty.
+      token=$(turn_start "$TMUX_PANE")
+      agent_proc=$(pane_agent "$TMUX_PANE")
+      spawn --watch-turn "$agent" "$TMUX_PANE" "$title" "${folder:-agent}" "$group" "$token" \
+        "${agent_proc%% *}" "${agent_proc#* }"
       ;;
     attention)
       body=${detail:-${folder:-agent}}
       [ "${#body}" -gt 80 ] && body="${body:0:79}…"
-      # Run this script again as the watcher, in its own session so it outlives
-      # the hook. Its output goes to /dev/null so the agent does not wait for it.
-      perl -MPOSIX -e 'defined(my $pid = fork) or exit 1; if ($pid) { exit } setsid; exec @ARGV' \
-        "$0" --watch "$agent" "$TMUX_PANE" "$title" "$body" "$group" "$detail" </dev/null >/dev/null 2>&1
+      spawn --watch "$agent" "$TMUX_PANE" "$title" "$body" "$group" "$detail"
       ;;
   esac
 fi

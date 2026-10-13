@@ -89,39 +89,115 @@ count_or() {
 # written; the watcher then runs without the check.
 PANE_FILE=
 
-# Take over the pane. The file is named after the tmux socket and the pane id,
-# because every tmux server has a pane %0. Characters other than letters and
-# digits (and % in the pane id, which looks like %12) are replaced, and both
-# parts are cut short, so the name cannot point outside the directory or grow
-# too long.
-pane_claim() {
-  local dir="${TMPDIR:-/tmp}/tmux-agent-notify" socket= pane file
+# pane_file PREFIX PANE
+# Print the path of a file for the pane. It is named after the tmux socket and
+# the pane id, because every tmux server has a pane %0. Characters other than
+# letters and digits (and % in the pane id, which looks like %12) are replaced,
+# and both parts are cut short, so the name cannot point outside the directory
+# or grow too long.
+pane_file() {
+  local dir="${TMPDIR:-/tmp}/tmux-agent-notify" socket= pane
   local safe=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789
   [ -n "${TMUX-}" ] && socket=${TMUX%%,*}
   socket=${socket//[!$safe]/_}
-  pane=${1//[!%$safe]/_}
+  pane=${2//[!%$safe]/_}
   # The end of a socket path is the part that differs between servers.
   [ "${#socket}" -gt 100 ] && socket=${socket:$((${#socket} - 100))}
-  file="$dir/pane-$socket-${pane:0:40}"
-  { mkdir -p "$dir" && printf '%s\n' "$$" >"$file"; } 2>/dev/null || return 0
-  PANE_FILE=$file
+  printf '%s\n' "$dir/$1-$socket-${pane:0:40}"
 }
 
-# True when another watcher has taken over the pane. A file that is missing or
+# hold FILE: write this watcher's id to FILE. Fails when it cannot be written.
+hold() {
+  { mkdir -p "${1%/*}" && printf '%s\n' "$$" >"$1"; } 2>/dev/null
+}
+
+# True when FILE holds the id of another watcher. A file that is missing or
 # unreadable does not count: a duplicate is better than no notification.
-pane_taken() {
+held_by_other() {
   local holder=
-  [ -n "$PANE_FILE" ] || return 1
-  { read -r holder <"$PANE_FILE"; } 2>/dev/null || return 1
+  [ -n "$1" ] || return 1
+  { read -r holder <"$1"; } 2>/dev/null || return 1
   [ -n "$holder" ] && [ "$holder" != "$$" ]
 }
 
-# Remove the pane file when it still holds this watcher's id.
-pane_release() {
+# Remove FILE when it still holds this watcher's id.
+let_go() {
   local holder=
-  [ -n "$PANE_FILE" ] || return 0
-  { read -r holder <"$PANE_FILE"; } 2>/dev/null || return 0
+  [ -n "$1" ] || return 0
+  { read -r holder <"$1"; } 2>/dev/null || return 0
   if [ "$holder" = "$$" ]; then
-    rm -f "$PANE_FILE"
+    rm -f "$1"
   fi
+}
+
+# Take over the pane.
+pane_claim() {
+  local file
+  file=$(pane_file pane "$1")
+  hold "$file" && PANE_FILE=$file
+  return 0
+}
+
+pane_taken() { held_by_other "$PANE_FILE"; }
+pane_release() { let_go "$PANE_FILE"; }
+
+# The turn file holds a token for the agent's current turn in the pane: the id
+# of the hook that started it. The turn watcher runs while its token is there.
+
+# turn_start PANE: start a turn and print its token. Prints nothing when the
+# file cannot be written.
+turn_start() {
+  hold "$(pane_file turn "$1")" && printf '%s\n' "$$"
+  return 0
+}
+
+turn_end() {
+  rm -f "$(pane_file turn "$1")" 2>/dev/null
+  return 0
+}
+
+# Print the words of a ps start time with single spaces, as ps pads them.
+squeeze() {
+  local words
+  read -r -a words <<<"$1"
+  printf '%s\n' "${words[*]-}"
+}
+
+# pane_agent PANE
+# Print the id and start time of the agent this hook runs under: the hook's
+# ancestor whose parent is the pane's shell. Prints nothing when there is no
+# such process, as when the agent runs hooks in a background process.
+pane_agent() {
+  local shell listing pid ppid start pid_of=() start_of=() at=$PPID hops=0
+  shell=$(tmux_cmd display-message -p -t "$1" '#{pane_pid}' 2>/dev/null) || return 0
+  [[ $shell =~ ^[0-9]+$ ]] || return 0
+  listing=$(ps -axo pid=,ppid=,lstart= 2>/dev/null) || return 0
+  while read -r pid ppid start; do
+    [[ $pid =~ ^[0-9]+$ && $ppid =~ ^[0-9]+$ ]] || continue
+    pid_of[pid]=$ppid start_of[pid]=$start
+  done <<<"$listing"
+  while [ "$at" -gt 1 ] && [ "$hops" -lt 64 ] && [ -n "${pid_of[at]-}" ]; do
+    if [ "${pid_of[at]}" = "$shell" ]; then
+      printf '%s %s\n' "$at" "$(squeeze "${start_of[at]}")"
+      return 0
+    fi
+    at=${pid_of[at]} hops=$((hops + 1))
+  done
+}
+
+# process_alive PID START: true while process PID is the one that started at
+# START. An id the system has given to a newer process does not count.
+process_alive() {
+  local now
+  now=$(ps -o lstart= -p "$1" 2>/dev/null) || return 1
+  [ "$(squeeze "$now")" = "$2" ]
+}
+
+# turn_is PANE TOKEN: true while TOKEN is the pane's turn. An empty token, from
+# a file that could not be written, is always current.
+turn_is() {
+  local holder=
+  [ -n "$2" ] || return 0
+  { read -r holder <"$(pane_file turn "$1")"; } 2>/dev/null || return 1
+  [ "$holder" = "$2" ]
 }

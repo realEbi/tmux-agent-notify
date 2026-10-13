@@ -26,12 +26,14 @@ bin_dir=$(resolve_dir "$0")
 
 # Merge the hooks into the current file, read from stdin. $notify is the path
 # as it is written in the command, and $hooks is the output of agent_hooks.
-# First remove the entries an earlier install left, under every event. Then,
+# First remove the entries an earlier install left, under every event, and
+# this checkout's entries for hooks the agent no longer uses. Then,
 # for each hook, append an entry unless one with that exact command is there.
 # Other hooks and keys are kept. A file with nothing but whitespace in it counts
 # as {}. jq fails, leaving the file untouched, when the file does not have the
 # expected shape.
 merge='
+  ($hooks | [split("\n")[] | select(. != "") | split("\t")[0]]) as $events |
   # True for an entry whose command an earlier install wrote: the old scripts,
   # or notify in another checkout of this tool. Single quotes are ignored.
   # The form written now is never stale.
@@ -43,11 +45,17 @@ merge='
          or ((capture("^(?<bin>/(.*/)?tmux-(cursor|agent)-notify/bin)/notify [a-z]+ [A-Za-z]+$")
               | .bin != $here) // false)
       ) // false;
-  def stale_group: (.hooks? | arrays | any(.[]; stale)) // false;
+  # True for an entry this checkout wrote for a hook the agent no longer uses.
+  ("\($notify) \($agent) ") as $ours |
+  def dropped:
+    (.command? | strings | select(startswith($ours)) | ltrimstr($ours)
+     | test("^[A-Za-z]+$") and (IN($events[]) | not)) // false;
+  def gone: stale or dropped;
+  def stale_group: (.hooks? | arrays | any(.[]; gone)) // false;
   # nested: a group keeps its other hooks, and goes when none is left.
   def clean:
-    if $shape == "flat" then map(select(stale | not))
-    else map(if stale_group then .hooks |= map(select(stale | not)) | select(.hooks != []) else . end)
+    if $shape == "flat" then map(select(gone | not))
+    else map(if stale_group then .hooks |= map(select(gone | not)) | select(.hooks != []) else . end)
     end;
   def has_command($cmd):
     if $shape == "flat" then any(.[]; .command? == $cmd)

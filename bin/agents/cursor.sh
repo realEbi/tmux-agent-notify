@@ -7,7 +7,7 @@ AGENT_CONFIG_SHAPE=flat
 
 # One line per hook: the event name, a tab, and the matcher (none for Cursor).
 agent_hooks() {
-  printf '%s\t\n' stop beforeShellExecution beforeMCPExecution
+  printf '%s\t\n' stop beforeShellExecution beforeMCPExecution beforeSubmitPrompt
 }
 
 # agent_parse EVENT INPUT
@@ -23,9 +23,11 @@ agent_parse() {
         @sh "session=\(.conversation_id | strings // "")",
         @sh "folder=\(.workspace_roots[0]? | strings // "")"
       ' 2>/dev/null)"
+      # Any other status, such as aborted, still ends the turn.
       case $status in
         completed) kind=finished title="$AGENT_LABEL finished" ;;
         error) kind=failed title="$AGENT_LABEL hit an error" ;;
+        *) kind=ended ;;
       esac
       ;;
     beforeShellExecution | beforeMCPExecution)
@@ -38,6 +40,17 @@ agent_parse() {
         @sh "folder=\(.workspace_roots[0]? | strings // "")"
       ' 2>/dev/null)"
       title="$AGENT_LABEL needs approval"
+      ;;
+    beforeSubmitPrompt)
+      # The question tool fires no hook (cursor-agent 2026.10.01), so the whole
+      # turn is watched for its card, from the prompt to stop.
+      eval "$(printf '%s' "$input" | jq -r '
+        objects |
+        @sh "kind=turn",
+        @sh "session=\(.conversation_id | strings // "")",
+        @sh "folder=\(.workspace_roots[0]? | strings // "")"
+      ' 2>/dev/null)"
+      title="$AGENT_LABEL has a question"
       ;;
   esac
 }
@@ -58,10 +71,27 @@ card_is_for() {
   [[ $screen == *"${cmd:0:24}"* ]]
 }
 
-# agent_prompt_on_screen SCREEN DETAIL
-# True when the approval card for DETAIL is in the last 15 lines of the pane text.
+# The question card's footer, or the placeholder of the input under it, from
+# cursor-agent 2026.10.01 (9969.index.js). Lines are joined first, so a footer
+# wrapped by a narrow pane still counts.
+question_is_shown() {
+  local screen
+  screen=$(printf '%s' "$1" | tr -s '[:space:]' ' ')
+  case "$screen" in
+    *'Enter next/submit · Esc to skip'* | *'Answer questions (Enter to select/next, Esc to skip)'*) return 0 ;;
+  esac
+  return 1
+}
+
+# agent_prompt_on_screen SCREEN DETAIL KIND
+# True when the prompt is in the last 15 lines of the pane text: the question
+# card for KIND question, else the approval card for DETAIL.
 agent_prompt_on_screen() {
   local screen
   screen=$(printf '%s\n' "$1" | tail -n 15)
+  if [ "${3-}" = question ]; then
+    question_is_shown "$screen"
+    return
+  fi
   card_is_shown "$screen" && card_is_for "$screen" "$2"
 }

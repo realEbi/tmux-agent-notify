@@ -6,6 +6,13 @@ BIN=$(cd "$ROOT/bin" && pwd -P)
 STOP_EXPECTED="$BIN/notify cursor stop"
 SHELL_EXPECTED="$BIN/notify cursor beforeShellExecution"
 MCP_EXPECTED="$BIN/notify cursor beforeMCPExecution"
+SUBMIT_EXPECTED="$BIN/notify cursor beforeSubmitPrompt"
+
+# with_question_hooks: the JSON on stdin with the hook that watches turns for
+# questions, the only entry under its event.
+with_question_hooks() {
+  jq --arg submit "$SUBMIT_EXPECTED" '.hooks.beforeSubmitPrompt = [{command: $submit}]'
+}
 # Claude Code's commands have the path in single quotes.
 CLAUDE_STOP="'$BIN/notify' claude Stop"
 CLAUDE_FAILURE="'$BIN/notify' claude StopFailure"
@@ -57,7 +64,7 @@ cursor_created() {
       beforeShellExecution: [{command: $shell}],
       beforeMCPExecution: [{command: $mcp}]
     }
-  }'
+  }' | with_question_hooks
 }
 
 # The three groups a first install adds to settings.json, as {Event: group}.
@@ -166,7 +173,7 @@ test_install_appends() {
   printf '%s\n' '{"version":1,"hooks":{"stop":[{"command":"/bin/other"}]}}' > "$(hooks_path)"
   run_install
   assert_exit 0
-  python3 - "$(hooks_path)" "$STOP_EXPECTED" "$SHELL_EXPECTED" "$MCP_EXPECTED" <<'PY' || exit 1
+  python3 - "$(hooks_path)" "$STOP_EXPECTED" "$SHELL_EXPECTED" "$MCP_EXPECTED" "$SUBMIT_EXPECTED" <<'PY' || exit 1
 import json, sys
 path, ours = sys.argv[1], sys.argv[2]
 with open(path) as handle:
@@ -181,7 +188,8 @@ if stop[0] != {"command": "/bin/other"}:
 if stop[1] != {"command": ours}:
     print(f"second entry wrong: {stop[1]!r}", file=sys.stderr)
     sys.exit(1)
-for name, approval in (("beforeShellExecution", sys.argv[3]), ("beforeMCPExecution", sys.argv[4])):
+for name, approval in (("beforeShellExecution", sys.argv[3]), ("beforeMCPExecution", sys.argv[4]),
+                       ("beforeSubmitPrompt", sys.argv[5])):
     arr = data["hooks"].get(name, [])
     if len(arr) != 1 or arr[0].get("command") != approval:
         print(f"{name} wrong: {arr!r}", file=sys.stderr)
@@ -226,7 +234,7 @@ with open(sys.argv[1]) as handle:
 if len(data["hooks"]["stop"]) != 1:
     print(f"expected stop length 1, got {len(data['hooks']['stop'])}", file=sys.stderr)
     sys.exit(1)
-for name in ("beforeShellExecution", "beforeMCPExecution"):
+for name in ("beforeShellExecution", "beforeMCPExecution", "beforeSubmitPrompt"):
     if len(data["hooks"][name]) != 1:
         print(f"expected {name} length 1", file=sys.stderr)
         sys.exit(1)
@@ -450,7 +458,7 @@ test_install_removes_old_entries() {
       beforeMCPExecution: [{command: $mcp}],
       afterFileEdit: [{command: "/bin/keep"}]
     }
-  }')
+  }' | with_question_hooks)
   assert_json "$(hooks_path)" "$expected"
 }
 
@@ -516,6 +524,31 @@ test_install_keeps_unrelated() {
     .hooks.stop += [{command: $stop}]
     | .hooks.beforeShellExecution = [{command: $shell}]
     | .hooks.beforeMCPExecution = [{command: $mcp}]
+  ' | with_question_hooks)
+  assert_json "$(hooks_path)" "$expected"
+}
+
+# Entries this checkout wrote for hooks the adapter no longer uses go; others
+# under the same events stay.
+test_install_removes_dropped_hooks() {
+  fresh_home
+  mkdir -p "$HOME/.cursor"
+  local fixture expected
+  fixture=$(jq -n --arg bin "$BIN" '{
+    version: 1,
+    hooks: {
+      afterAgentThought: [{command: ($bin + "/notify cursor afterAgentThought")}],
+      postToolUse: [{command: "/bin/keep"}, {command: ($bin + "/notify cursor postToolUse")}],
+      afterFileEdit: [{command: ($bin + "/notify cursor afterFileEdit --flag")}]
+    }
+  }')
+  printf '%s\n' "$fixture" > "$(hooks_path)"
+  run_install
+  assert_exit 0
+  expected=$(cursor_created | jq --arg bin "$BIN" '
+    .hooks.afterAgentThought = []
+    | .hooks.postToolUse = [{command: "/bin/keep"}]
+    | .hooks.afterFileEdit = [{command: ($bin + "/notify cursor afterFileEdit --flag")}]
   ')
   assert_json "$(hooks_path)" "$expected"
 }
@@ -535,7 +568,7 @@ test_install_keeps_current_entry() {
   expected=$(printf '%s' "$fixture" | jq --arg shell "$SHELL_EXPECTED" --arg mcp "$MCP_EXPECTED" '
     .hooks.beforeShellExecution = [{command: $shell}]
     | .hooks.beforeMCPExecution = [{command: $mcp}]
-  ')
+  ' | with_question_hooks)
   assert_json "$(hooks_path)" "$expected"
 }
 
@@ -1062,6 +1095,7 @@ run_tests \
   test_install_removes_old_idempotent \
   test_install_keeps_unrelated \
   test_install_keeps_current_entry \
+  test_install_removes_dropped_hooks \
   test_install_claude_creates \
   test_install_claude_empty_file \
   test_install_blank_file \

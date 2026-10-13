@@ -2,6 +2,7 @@
 # Answers from FAKE_STATE (see fake_set):
 #   ps eww -o command= -p PID   -> ps-env-PID
 #   ps -o command= -p PID       -> ps-command-PID
+#   ps -o lstart= -p PID        -> ps-start-PID
 #   ps -axo ...                 -> ps-list
 # A missing file gives no output and exit status 1, like a process that is gone.
 mkdir -p "$FAKE_LOG"
@@ -12,6 +13,7 @@ for arg in "$@"; do
 done
 case " $* " in
   *' eww '*) name=ps-env-$pid ;;
+  *' lstart= -p '*) name=ps-start-$pid ;;
   *' -p '*) name=ps-command-$pid ;;
 esac
 if [ -n "${FAKE_STATE-}" ] && [ -f "$FAKE_STATE/$name" ]; then

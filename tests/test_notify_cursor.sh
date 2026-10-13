@@ -543,7 +543,282 @@ test_approval_bad_json() {
   assert_log_lacks tmux 'capture-pane'
 }
 
+submit_json='{"prompt":"pick a color","conversation_id":"c1","workspace_roots":["/tmp/app"]}'
+aborted_json='{"status":"aborted","conversation_id":"c1","workspace_roots":["/tmp/app"]}'
+prompt_question=$'Clarifying Questions (1)\n› [ ] red\n  [ ] blue\n↑/↓ option · ←/→ question · Space select · Enter next/submit · Esc to skip\n→ Answer questions (Enter to select/next, Esc to skip)'
+
+# The turn tests start with no card up and you looking at the pane, like
+# watch_setup. turn_hook EVENT JSON runs a hook, not through run_capture.
+turn_setup() {
+  watch_setup "$1"
+  fake_set tmux-capture $'agent working\nno card yet'
+}
+
+turn_hook() {
+  "$ROOT/bin/notify" cursor "$1" <<<"$2" >"$FAKE_LOG/hook.stdout" ||
+    { echo "hook $1 failed" >&2; exit 1; }
+  [ "$(cat "$FAKE_LOG/hook.stdout")" = '{}' ] || { echo "hook $1 did not print {}" >&2; exit 1; }
+}
+
+# end_turn PANE: the turn ends; its watcher and the turn file go.
+end_turn() {
+  turn_hook stop "$aborted_json"
+  assert_no_watchers "$1"
+  [ -z "$(ls -A "$TMPDIR/tmux-agent-notify" 2>/dev/null)" ] ||
+    { echo "file left behind: $(ls -A "$TMPDIR/tmux-agent-notify")" >&2; exit 1; }
+}
+
+# A question that is the first thing in the turn still notifies.
+test_turn_question_notifies() {
+  turn_setup %w19
+  look_away
+  turn_hook beforeSubmitPrompt "$submit_json"
+  wait_for_captures 2
+  assert_not_called terminal-notifier
+  fake_set tmux-capture "$prompt_question"
+  wait_for_notifier
+  assert_notifier_arg -title 'Cursor has a question'
+  assert_notifier_arg -message app
+  assert_notifier_arg -group cursor-c1
+  assert_log_contains terminal-notifier "'%w19'"
+  end_turn %w19
+  assert_notifier_calls 1
+}
+
+test_turn_looking_then_away() {
+  turn_setup %w20
+  fake_set tmux-capture "$prompt_question"
+  turn_hook beforeSubmitPrompt "$submit_json"
+  wait_for_polls 2
+  assert_not_called terminal-notifier
+  look_away
+  wait_for_notifier
+  end_turn %w20
+  assert_notifier_calls 1
+}
+
+test_turn_one_notification_per_question() {
+  local polls
+  turn_setup %w21
+  look_away
+  fake_set tmux-capture "$prompt_question"
+  turn_hook beforeSubmitPrompt "$submit_json"
+  wait_for_notifier
+  polls=$(tmux_calls capture-pane)
+  wait_for_captures $((polls + 5))
+  end_turn %w21
+  assert_notifier_calls 1
+}
+
+# Once a question is answered, the next one in the same turn notifies too.
+test_turn_second_question_notifies_again() {
+  local polls
+  turn_setup %w22
+  look_away
+  fake_set tmux-capture "$prompt_question"
+  turn_hook beforeSubmitPrompt "$submit_json"
+  wait_for_notifier
+  fake_set tmux-capture 'agent working'
+  polls=$(tmux_calls capture-pane)
+  wait_for_captures $((polls + 3))
+  assert_notifier_calls 1
+  fake_set tmux-capture "$prompt_question"
+  wait_for_notifier_calls 2
+  end_turn %w22
+  assert_notifier_calls 2
+}
+
+# A narrow pane wraps the footer and leaves out the placeholder.
+test_turn_wrapped_footer() {
+  turn_setup %w23
+  look_away
+  fake_set tmux-capture $'Clarifying Questions (1)\n› [ ] red\n↑/↓ option · ←/→ question · Space select · Enter\nnext/submit ·  \nEsc to skip'
+  turn_hook beforeSubmitPrompt "$submit_json"
+  wait_for_notifier
+  assert_notifier_arg -title 'Cursor has a question'
+  end_turn %w23
+}
+
+# The card is still in the scrollback, above the last 15 lines.
+test_turn_card_above_window() {
+  local pad=$prompt_question i
+  for i in $(seq 1 16); do
+    pad=$pad$'\n'"pad-$i"
+  done
+  turn_setup %w24
+  look_away
+  fake_set tmux-capture "$pad"
+  turn_hook beforeSubmitPrompt "$submit_json"
+  wait_for_captures 5
+  end_turn %w24
+  assert_not_called terminal-notifier
+}
+
+# Each card is left to its own watcher.
+test_turn_ignores_approval_card() {
+  turn_setup %w25
+  look_away
+  fake_set tmux-capture "$prompt_shell"
+  turn_hook beforeSubmitPrompt "$submit_json"
+  wait_for_captures 5
+  end_turn %w25
+  assert_not_called terminal-notifier
+}
+
+test_approval_ignores_question_card() {
+  harness_use_fakes
+  export NOTIFY_APPROVAL_DELAY=0
+  export NOTIFY_APPROVAL_APPEAR_POLLS=3
+  export FAKE_OSA_NAME=Safari
+  export FAKE_TMUX_CAPTURE="$prompt_question"
+  run_hook beforeShellExecution "$shell_json"
+  wait_quiet 1
+  assert_not_called terminal-notifier
+}
+
+# The turn watcher never takes the pane, so an approval watcher is not stopped.
+test_turn_keeps_approval_watcher() {
+  watch_setup %w26
+  turn_hook beforeSubmitPrompt "$submit_json"
+  watch_hook
+  wait_for_polls 2
+  wait_for_watchers %w26 2
+  look_away
+  wait_for_notifier
+  wait_for_watchers %w26 1
+  end_turn %w26
+  assert_notifier_calls 1
+  assert_notifier_arg -title 'Cursor needs approval'
+}
+
+test_turn_ends_on_stop() {
+  turn_setup %w27
+  look_away
+  turn_hook beforeSubmitPrompt "$submit_json"
+  wait_for_captures 2
+  end_turn %w27
+  fake_set tmux-capture "$prompt_question"
+  wait_quiet 0.5
+  assert_not_called terminal-notifier
+}
+
+# The turn file is written by the hook, so a turn that ends before its watcher
+# has polled once still stops it.
+test_turn_ended_before_watcher_polls() {
+  turn_setup %w28
+  turn_hook beforeSubmitPrompt "$submit_json"
+  turn_hook stop "$aborted_json"
+  assert_no_watchers %w28
+}
+
+test_turn_newer_replaces_older() {
+  turn_setup %w29
+  turn_hook beforeSubmitPrompt "$submit_json"
+  wait_for_captures 2
+  turn_hook beforeSubmitPrompt "$submit_json"
+  wait_for_watchers %w29 1
+  look_away
+  fake_set tmux-capture "$prompt_question"
+  wait_for_notifier
+  wait_quiet 0.5
+  end_turn %w29
+  assert_notifier_calls 1
+}
+
+# agent_setup: the hook runs under process 500, a child of the pane's shell
+# 900, which started at the time given. turn_hook runs the hook straight from
+# this shell, so this shell is its parent. Bash 3.2 has no BASHPID.
+agent_setup() {
+  local me
+  me=$(exec sh -c 'echo $PPID')
+  fake_set tmux-pane-pid 900
+  fake_set ps-list "  $me   500 Tue Oct 13 11:05:00 2026
+  500   900 Tue Oct 13 11:00:00 2026
+  900     1 Tue Oct 13 10:00:00 2026    "
+  # ps pads the start time.
+  fake_set ps-start-500 'Tue Oct 13 11:00:00 2026    '
+}
+
+# The agent dies without a stop hook: the watcher goes too.
+test_turn_ends_when_agent_exits() {
+  turn_setup %w31
+  agent_setup
+  look_away
+  turn_hook beforeSubmitPrompt "$submit_json"
+  wait_for_captures 2
+  wait_for_watchers %w31 1
+  assert_log_contains ps "-o lstart= -p 500"
+  rm -f "$FAKE_STATE/ps-start-500"
+  assert_no_watchers %w31
+  fake_set tmux-capture "$prompt_question"
+  wait_quiet 0.5
+  assert_not_called terminal-notifier
+}
+
+# The id now belongs to a process that started later.
+test_turn_agent_id_reused() {
+  turn_setup %w32
+  agent_setup
+  fake_set ps-start-500 'Tue Oct 13 12:00:00 2026'
+  turn_hook beforeSubmitPrompt "$submit_json"
+  assert_no_watchers %w32
+}
+
+# With the agent alive, the turn has no time limit.
+test_turn_agent_alive_outlasts_budget() {
+  turn_setup %w33
+  agent_setup
+  export NOTIFY_TURN_MAX_SECONDS=1
+  look_away
+  turn_hook beforeSubmitPrompt "$submit_json"
+  wait_quiet 2
+  wait_for_watchers %w33 1
+  fake_set tmux-capture "$prompt_question"
+  wait_for_notifier
+  end_turn %w33
+}
+
+# No agent process found: the budget ends the watcher.
+test_turn_without_agent_uses_budget() {
+  turn_setup %w34
+  export NOTIFY_TURN_MAX_SECONDS=1
+  turn_hook beforeSubmitPrompt "$submit_json"
+  wait_for_captures 1
+  assert_no_watchers %w34
+  assert_log_contains tmux-pane-pid pane_pid
+}
+
+# Ending the turn does not change the finished notification.
+test_turn_stop_completed_still_notifies() {
+  turn_setup %w30
+  turn_hook beforeSubmitPrompt "$submit_json"
+  wait_for_captures 2
+  look_away
+  turn_hook stop '{"status":"completed","conversation_id":"c1","workspace_roots":["/tmp/app"]}'
+  assert_no_watchers %w30
+  wait_for_notifier
+  assert_notifier_arg -title 'Cursor finished'
+  assert_notifier_calls 1
+}
+
 run_tests \
+  test_turn_question_notifies \
+  test_turn_looking_then_away \
+  test_turn_one_notification_per_question \
+  test_turn_second_question_notifies_again \
+  test_turn_wrapped_footer \
+  test_turn_card_above_window \
+  test_turn_ignores_approval_card \
+  test_approval_ignores_question_card \
+  test_turn_keeps_approval_watcher \
+  test_turn_ends_on_stop \
+  test_turn_ended_before_watcher_polls \
+  test_turn_newer_replaces_older \
+  test_turn_stop_completed_still_notifies \
+  test_turn_ends_when_agent_exits \
+  test_turn_agent_id_reused \
+  test_turn_agent_alive_outlasts_budget \
+  test_turn_without_agent_uses_budget \
   test_approval_command_is_not_run \
   test_approval_bad_json \
   test_approval_no_pane \
