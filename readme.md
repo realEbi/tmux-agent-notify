@@ -10,7 +10,8 @@ Supported: Cursor (`agent`), Claude Code (`claude`) and the OpenAI Codex CLI (`c
 
 | When | Cursor | Claude Code | Codex |
 | --- | --- | --- | --- |
-| The agent is waiting for you | **Cursor needs approval** | **Claude is waiting for you** | **Codex needs approval** |
+| The agent needs your approval | **Cursor needs approval** | **Claude is waiting for you** | **Codex needs approval** |
+| The agent asks you a question | **Cursor has a question** | **Claude is waiting for you** | not covered |
 | A turn completes | **Cursor finished** | **Claude finished** | **Codex finished** |
 | A turn ends with an error | **Cursor hit an error** | **Claude hit an error** | not available |
 

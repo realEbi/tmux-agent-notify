@@ -43,7 +43,10 @@ agent_parse() {
       ;;
     beforeSubmitPrompt)
       # The question tool fires no hook (cursor-agent 2026.10.01), so the whole
-      # turn is watched for its card, from the prompt to stop.
+      # turn is watched for its card, from the prompt to stop. Cursor has
+      # confirmed this as a bug; once preToolUse fires for AskQuestion, that
+      # hook can replace the turn watcher:
+      # https://forum.cursor.com/t/cursor-cli-askquestion-tool-skips-pretooluse-and-posttooluse-hooks/161836
       eval "$(printf '%s' "$input" | jq -r '
         objects |
         @sh "kind=turn",
