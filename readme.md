@@ -1,8 +1,8 @@
 # tmux-agent-notify
 
-macOS notifications for AI agent CLIs running in tmux. Get a ping when a turn finishes or when the agent is waiting for you, then click the notification to jump back to the right pane.
+Get a macOS notification when an AI agent in tmux finishes or needs you, and click it to jump straight back to the right pane.
 
-Supported: Cursor (`agent`), Claude Code (`claude`) and the OpenAI Codex CLI (`codex`).
+Works with Cursor (`agent`), Claude Code (`claude`) and the OpenAI Codex CLI (`codex`).
 
 ![Cursor notifications from tmux-agent-notify](docs/notification-sample.png)
 
@@ -15,35 +15,47 @@ Supported: Cursor (`agent`), Claude Code (`claude`) and the OpenAI Codex CLI (`c
 | A turn completes | **Cursor finished** | **Claude finished** | **Codex finished** |
 | A turn ends with an error | **Cursor hit an error** | **Claude hit an error** | not available |
 
-- Nothing is sent while you are looking at the pane, when you interrupt a turn, or when the agent is not running in tmux.
-- If a prompt appears while you are looking and you switch away without answering it, you are notified at that moment.
-- Clicking a notification brings the terminal forward and selects the pane.
+It stays out of your way:
 
-## Requirements
-
-- macOS and tmux, with the agent started inside a tmux pane.
-- `jq` (ships with macOS 15 and later, otherwise `brew install jq`).
-- `brew install terminal-notifier`, for click-to-focus. Without it you still get notifications, but clicking one opens Script Editor instead of your pane.
+- **No notification while you are looking at the pane.** If you switch away with a prompt still unanswered, you are notified at that moment.
+- **No notification when you interrupt a turn yourself.**
+- **Clicking a notification** brings your terminal forward and selects the pane.
 
 ## Install
 
-```bash
-bin/install                 # every agent whose config directory exists (~/.cursor, ~/.claude, ~/.codex)
-bin/install claude          # one agent
-bin/install cursor claude   # the named agents
-```
+You need macOS, tmux, and at least one of the agents above.
 
-The installer keeps your other hooks and settings, and is safe to run again. Run it again after pulling changes or moving the directory, then start a new agent session so the hooks load.
+1. **Install the two helper tools.**
 
-Then do these once:
+   ```bash
+   brew install terminal-notifier jq
+   ```
 
-1. **Allow notifications for terminal-notifier.** Open System Settings → Notifications → **terminal-notifier** and turn on **Allow notifications**. Choose **Persistent** if you want a notification to stay until you click it.
+   `terminal-notifier` is what makes a click jump to your pane. `jq` already ships with macOS 15 and later.
+
+2. **Get the code and install the hooks.**
+
+   ```bash
+   git clone https://github.com/realEbi/tmux-agent-notify.git
+   cd tmux-agent-notify
+   bin/install
+   ```
+
+   This sets up every agent it finds on your machine (`~/.cursor`, `~/.claude`, `~/.codex`). To pick agents yourself, name them: `bin/install claude` or `bin/install cursor codex`.
+
+   The installer keeps your other hooks and settings, and is safe to run again.
+
+3. **Allow notifications for terminal-notifier.** Open System Settings → Notifications → **terminal-notifier** and turn on **Allow notifications**. Choose **Persistent** if you want a notification to stay until you click it.
 
    ![Notification settings for terminal-notifier](docs/terminal-notifier.png)
 
-2. **Allow automation.** If macOS asks whether your terminal may control System Events, allow it. That is how the hooks tell whether you are looking at the pane.
+4. **Allow automation.** If macOS asks whether your terminal may control System Events, allow it. That is how the tool tells whether you are looking at the pane.
 
-3. **Codex only: trust the hooks.** The next time you start `codex` it shows "Hooks need review"; choose **Trust all and continue**. You can also run `/hooks` inside Codex.
+5. **Codex only: trust the hooks.** The next time you start `codex` it shows "Hooks need review". Choose **Trust all and continue**, or run `/hooks` inside Codex.
+
+6. **Start a new agent session** inside a tmux pane, so the hooks load.
+
+After pulling changes or moving the directory, run `bin/install` again.
 
 ## Try it
 
@@ -53,14 +65,18 @@ Then do these once:
 
 ## Troubleshooting
 
-- **No notification at all.** Check that the agent was started inside tmux, that terminal-notifier is allowed (step 1 above), and that Focus or Do Not Disturb is off. For Codex, check that you trusted the hooks.
-- **Clicking opens Script Editor.** terminal-notifier is not allowed to post notifications; see step 1 above.
-- **terminal-notifier is missing from the Notifications list.** Trigger one notification first so macOS registers it. If you denied it earlier, run `tccutil reset UserNotification fr.julienxx.oss.terminal-notifier` and trigger one again.
+| Problem | What to check |
+| --- | --- |
+| No notification at all | The agent was started inside tmux. terminal-notifier is allowed (step 3). Focus or Do Not Disturb is off. For Codex, you trusted the hooks (step 5). |
+| Clicking opens Script Editor | terminal-notifier is not installed, or not allowed to post notifications (steps 1 and 3). |
+| terminal-notifier is missing from the Notifications list | Trigger one notification first so macOS registers it. If you denied it earlier, run `tccutil reset UserNotification fr.julienxx.oss.terminal-notifier` and trigger one again. |
 
 ## Good to know
 
-- Claude Code: a prompt you answer within about six seconds never notifies.
-- Codex: there is no error notification, and two sessions started in the same folder can be mixed up.
-- A locked screen counts as looking, so walking away without switching app does not notify.
+- **Claude Code:** a prompt you answer within about six seconds never notifies.
+- **Codex:** there is no error notification, and two sessions started in the same folder can be mixed up.
+- **Locked screen:** it counts as looking, so walking away without switching app does not notify.
 
-The full list of limitations, the settings, and how it all works are in [docs/architecture.md](docs/architecture.md). That page also explains how to add another agent and how to run the tests.
+## Learn more
+
+[docs/architecture.md](docs/architecture.md) explains how it works, lists the settings and every known limitation, and shows how to add another agent and run the tests.
