@@ -12,7 +12,6 @@ watch() {
   local delay interval slow polls appear max
   local seen=0 claimed=0 missed=0 i=0 screen
 
-  # A setting that is not a number falls back to its default.
   delay=$(number_or "${NOTIFY_APPROVAL_DELAY-}" 0.4)
   interval=$(number_or "${NOTIFY_APPROVAL_INTERVAL-}" 0.5)
   slow=$(number_or "${NOTIFY_APPROVAL_SLOW_INTERVAL-}" 2)
@@ -115,6 +114,7 @@ watch_turn() {
 
 # Run this script again as a watcher, in its own session so it outlives the
 # hook. Its output goes to /dev/null so the agent does not wait for it.
+# perl, because macOS ships it and has no setsid command.
 spawn() {
   perl -MPOSIX -e 'defined(my $pid = fork) or exit 1; if ($pid) { exit } setsid; exec @ARGV' \
     "$0" "$@" </dev/null >/dev/null 2>&1
@@ -159,6 +159,7 @@ if load_adapter "$agent" && { [ -n "${TMUX_PANE-}" ] || declare -F agent_locate 
 
   case $kind in
     finished | failed | ended)
+      # ended closes the turn without notifying, as for a turn you interrupt.
       turn_end "$TMUX_PANE"
       # Stay quiet when you are already looking at this pane.
       if [ "$kind" != ended ] && ! { terminal_is_front && pane_is_visible "$TMUX_PANE"; }; then

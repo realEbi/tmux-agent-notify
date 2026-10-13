@@ -48,7 +48,9 @@ pane_is_visible() {
   [ "$active" = 1 ] && [ "$window" = 1 ] && [ "${attached:-0}" -ge 1 ] 2>/dev/null
 }
 
-# Post a notification. Clicking it runs focus-pane for the given pane.
+# Post a notification. Clicking it runs focus-pane for the given pane. When
+# terminal-notifier is missing or fails, osascript posts it instead, and a
+# click then cannot reach the pane.
 notify() {
   local title=$1 body=$2 group=$3 pane=$4 socket= click
   [ -n "${TMUX-}" ] && socket=${TMUX%%,*}
@@ -106,7 +108,7 @@ pane_file() {
   printf '%s\n' "$dir/$1-$socket-${pane:0:40}"
 }
 
-# hold FILE: write this watcher's id to FILE. Fails when it cannot be written.
+# hold FILE: write this process's id to FILE. Fails when it cannot be written.
 hold() {
   { mkdir -p "${1%/*}" && printf '%s\n' "$$" >"$1"; } 2>/dev/null
 }

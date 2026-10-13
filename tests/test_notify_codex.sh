@@ -140,7 +140,6 @@ assert_parsed() {
   [ "$got" = "attention|Codex needs approval|$2" ] || { echo "parsed [$1]: got [$got], want detail [$2]" >&2; exit 1; }
 }
 
-# on_screen TEXT
 on_screen() {
   (
     . "$ROOT/bin/agents/codex.sh"
@@ -650,7 +649,6 @@ test_codex_locator_tools_fail() {
   assert_notifier_arg -execute "$(click_for com.apple.Terminal /tmp/sockA %711)"
 }
 
-# What ps and lsof print is data.
 test_codex_process_text_is_not_run() {
   harness_use_fakes
   use_pane_a
@@ -692,7 +690,7 @@ test_other_agents_do_not_locate() {
   assert_not_called lsof
   assert_log_lacks tmux /tmp/sockB
 
-  # And without a pane they stay silent, as before.
+  # Without a pane they stay silent.
   harness_use_fakes
   add_process 4102 ttys004 "$CLIENT" /tmp/app "$ENV_B"
   run_capture as_child_of "$DAEMON" "$ROOT/bin/notify" claude Stop <<<"$stop_json"

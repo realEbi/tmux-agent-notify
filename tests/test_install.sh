@@ -462,7 +462,6 @@ test_install_removes_old_entries() {
   assert_json "$(hooks_path)" "$expected"
 }
 
-# After old entries were replaced, a second run changes nothing.
 test_install_removes_old_idempotent() {
   fresh_home
   mkdir -p "$HOME/.cursor"

@@ -417,7 +417,6 @@ test_claude_cwd_is_not_run() {
   fi
 }
 
-# Pane text is data too.
 test_claude_pane_is_not_run() {
   watch_setup %c14
   cd "$FAKE_LOG" || exit 1

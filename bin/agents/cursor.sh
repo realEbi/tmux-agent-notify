@@ -18,6 +18,7 @@ agent_parse() {
   case $event in
     stop)
       # The folder is the first workspace path; the core takes its last part.
+      # @sh quotes every value, so the eval runs nothing from the payload.
       eval "$(printf '%s' "$input" | jq -r '
         @sh "status=\(.status | strings // "")",
         @sh "session=\(.conversation_id | strings // "")",

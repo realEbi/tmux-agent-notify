@@ -20,6 +20,7 @@ agent_parse() {
     *) return 0 ;;
   esac
   # The folder is the working directory; the core takes its last part.
+  # @sh quotes every value, so the eval runs nothing from the payload.
   eval "$(printf '%s' "$input" | jq -r '
     objects |
     @sh "object=1",
@@ -50,7 +51,6 @@ agent_parse() {
 agent_prompt_on_screen() {
   local line third= second= last=
   while IFS= read -r line; do
-    # A line of only spaces or tabs is blank.
     if [[ $line == *[![:space:]]* ]]; then
       third=$second second=$last last=$line
     fi

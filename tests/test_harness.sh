@@ -221,7 +221,6 @@ test_harness_no_watchers() {
   [ -z "$(harness_watchers "$pane")" ] || { echo "assert_no_watchers left the watcher running" >&2; exit 1; }
 }
 
-# run_tests stops the watchers of a tracked pane when a test ends.
 test_harness_cleanup_stops_watchers() {
   harness_use_fakes
   local pane="%k$$"
@@ -235,7 +234,6 @@ test_harness_cleanup_stops_watchers() {
   assert_no_watchers "$pane"
 }
 
-# The fake ps and lsof answer from FAKE_STATE, one file per process.
 test_harness_fake_ps_and_lsof() {
   harness_use_fakes
   run_capture ps -o command= -p 41
@@ -263,7 +261,6 @@ test_harness_fake_ps_and_lsof() {
   assert_log_line lsof '-a -d cwd -p 43 -Fpn'
 }
 
-# The harness looks for watchers with the real ps, not the fake one.
 test_harness_watchers_use_real_ps() {
   harness_use_fakes
   harness_watchers %none >/dev/null

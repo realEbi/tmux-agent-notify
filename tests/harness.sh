@@ -26,6 +26,9 @@ harness_use_fakes() {
   LAST_STDOUT=
 }
 
+# harness_hide NAME
+# Put a stub that exits 127 first on PATH, so running NAME fails as if it were
+# not installed.
 harness_hide() {
   local name="$1"
   printf '%s\n' '#!/bin/sh' 'exit 127' > "$HIDE_DIR/$name"
@@ -35,11 +38,11 @@ harness_hide() {
 # fake_set NAME VALUE
 # Change what a fake answers from its next call on, even for a process that is
 # already running. Names: tmux-capture, tmux-capture-exit, tmux-display,
-# osa-bundle, osa-name, and tmux-capture-once, which is the pane text for the
-# next capture-pane call only. For the fake ps and lsof: ps-list, and for each
-# process id ps-command-PID, ps-env-PID and lsof-cwd-PID. Written through a
-# temp file and renamed, so a reader never sees a half-written value. /bin/mv,
-# not the fake mv, to keep its log clean.
+# tmux-pane-pid, osa-bundle, osa-name, and tmux-capture-once, which is the pane
+# text for the next capture-pane call only. For the fake ps and lsof: ps-list,
+# and for each process id ps-command-PID, ps-env-PID, ps-start-PID and
+# lsof-cwd-PID. Written through a temp file and renamed, so a reader never sees
+# a half-written value. /bin/mv, not the fake mv, to keep its log clean.
 fake_set() {
   local name="$1" value="$2"
   local tmp="$FAKE_STATE/.$name.$$.tmp"
@@ -81,7 +84,6 @@ tmux_called() {
   [ "$(tmux_calls "$1")" -ge "$2" ]
 }
 
-# Wait up to 5 seconds for the first terminal-notifier call.
 wait_for_notifier() {
   wait_until 5 test -f "$FAKE_LOG/terminal-notifier" || {
     echo "timeout waiting for terminal-notifier" >&2
@@ -115,8 +117,6 @@ notifier_called() {
   [ "$n" -ge "$1" ]
 }
 
-# wait_for_notifier_calls N
-# Wait up to 5 seconds until terminal-notifier has been called N times.
 wait_for_notifier_calls() {
   wait_until 5 notifier_called "$1" || {
     echo "timeout waiting for $1 terminal-notifier calls" >&2
@@ -124,8 +124,6 @@ wait_for_notifier_calls() {
   }
 }
 
-# wait_for_captures N
-# Wait up to 5 seconds until the pane has been read N times.
 wait_for_captures() {
   wait_until 5 tmux_called capture-pane "$1" || {
     echo "timeout waiting for $1 capture-pane calls, saw $(tmux_calls capture-pane)" >&2
@@ -332,6 +330,9 @@ assert_no_watchers() {
   }
 }
 
+# run_tests NAME...
+# Run each test in a subshell and exit 1 when any failed. The subshell is the
+# condition of an "if", where set -e has no effect, so assertions call exit.
 run_tests() {
   local status=0
   local name

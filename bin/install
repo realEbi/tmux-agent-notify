@@ -27,10 +27,10 @@ bin_dir=$(resolve_dir "$0")
 # Merge the hooks into the current file, read from stdin. $notify is the path
 # as it is written in the command, and $hooks is the output of agent_hooks.
 # First remove the entries an earlier install left, under every event, and
-# this checkout's entries for hooks the agent no longer uses. Then,
-# for each hook, append an entry unless one with that exact command is there.
-# Other hooks and keys are kept. A file with nothing but whitespace in it counts
-# as {}. jq fails, leaving the file untouched, when the file does not have the
+# this checkout's entries for hooks the agent no longer uses. Then, for each
+# hook, append an entry unless one with that exact command is there. Other
+# hooks and keys are kept. A file with nothing but whitespace in it counts as
+# {}. jq fails, leaving the file untouched, when the file does not have the
 # expected shape.
 merge='
   ($hooks | [split("\n")[] | select(. != "") | split("\t")[0]]) as $events |

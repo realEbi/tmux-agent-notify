@@ -349,7 +349,7 @@ test_watch_bad_interval() {
   assert_notifier_calls 1
 }
 
-# A budget that is not a whole number falls back to the default.
+# A budget that is not a whole number above zero falls back to the default.
 test_watch_bad_max_seconds() {
   local max
   for max in 1.5 abc 0; do
@@ -364,7 +364,6 @@ test_watch_bad_max_seconds() {
   done
 }
 
-# The card shows up a few polls after the hook.
 test_watch_card_appears_later() {
   watch_setup %w9
   fake_set tmux-capture $'agent working\nno card yet'
@@ -610,7 +609,6 @@ test_turn_one_notification_per_question() {
   assert_notifier_calls 1
 }
 
-# Once a question is answered, the next one in the same turn notifies too.
 test_turn_second_question_notifies_again() {
   local polls
   turn_setup %w22

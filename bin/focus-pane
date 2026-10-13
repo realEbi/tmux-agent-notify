@@ -19,6 +19,9 @@ name_walk() {
   return 0
 }
 
+# The bundle id is put into the AppleScript text, so one with a quote or a
+# backslash is not used. Without one, the first known terminal that is running
+# is activated.
 if [ -n "$bundle" ] && ! printf '%s' "$bundle" | grep -q '["\\]'; then
   osascript -e "tell application id \"$bundle\" to activate" || true
 else
