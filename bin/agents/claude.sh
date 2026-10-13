@@ -45,7 +45,8 @@ agent_parse() {
 
 # agent_prompt_on_screen SCREEN DETAIL
 # True when one of the last three lines of the pane text that are not blank
-# contains "Esc to cancel", the footer of every prompt in Claude Code 2.1.294.
+# contains "Esc to cancel", the footer of the approval and question prompts in
+# Claude Code 2.1.294 and 2.1.296. Other prompts were not checked.
 # Three lines, because a narrow pane wraps the footer. The same words further
 # up, in the conversation, do not count.
 agent_prompt_on_screen() {

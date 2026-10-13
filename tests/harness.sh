@@ -338,7 +338,6 @@ run_tests() {
   local name
   for name in "$@"; do
     if (
-      set -e
       trap harness_cleanup EXIT
       "$name"
     ); then

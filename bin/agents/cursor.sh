@@ -89,7 +89,9 @@ question_is_shown() {
 
 # agent_prompt_on_screen SCREEN DETAIL KIND
 # True when the prompt is in the last 15 lines of the pane text: the question
-# card for KIND question, else the approval card for DETAIL.
+# card for KIND question, else the approval card for DETAIL. Only the bottom of
+# the pane counts, so a card that has scrolled up into the conversation does
+# not. 15 is a chosen size, not a measured one.
 agent_prompt_on_screen() {
   local screen
   screen=$(printf '%s\n' "$1" | tail -n 15)

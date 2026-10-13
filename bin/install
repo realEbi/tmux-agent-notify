@@ -126,6 +126,7 @@ install_agent() {
   fi
 }
 
+# jq must also run: one that is on PATH but broken counts as missing.
 command -v jq >/dev/null 2>&1 && jq -n . >/dev/null 2>&1 || fail 'jq not found'
 
 # No agent named: take each adapter whose config directory exists.
