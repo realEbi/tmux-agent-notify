@@ -4,9 +4,7 @@ Get a macOS notification when an AI agent in tmux finishes or needs you, and cli
 
 Works with Cursor (`agent`), Claude Code (`claude`) and the OpenAI Codex CLI (`codex`).
 
-[![Watch the tmux-agent-notify demo](docs/notification-sample.png)](docs/demo.mp4)
-
-[Watch the video demo](docs/demo.mp4) to see it in action.
+![tmux-agent-notify demo](docs/demo.gif)
 
 ## What you get
 
@@ -94,3 +92,7 @@ Other projects worth exploring for working with AI agents in tmux:
 - [tmux-select](https://github.com/3axap4eHko/tmux-select) — A window picker with built-in fuzzy search, agent status, and navigation to panes waiting for input.
 
 tmux-agent-notify focuses on macOS notifications for Cursor, Claude Code, and Codex: notify when you are away from the pane, then bring your terminal forward and select that pane when you click.
+
+## License
+
+[MIT](LICENSE) © 2026 realEbi.
